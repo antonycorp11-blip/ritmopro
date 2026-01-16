@@ -2,7 +2,8 @@
 export enum GameState {
   MENU = 'MENU',
   PLAYING = 'PLAYING',
-  RESULTS = 'RESULTS'
+  RESULTS = 'RESULTS',
+  RANKING = 'RANKING'
 }
 
 export interface LevelConfig {
