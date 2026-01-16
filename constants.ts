@@ -16,7 +16,7 @@ export const LEVELS: LevelConfig[] = [
     name: "Valsa Básica (3/4)",
     bpm: 80,
     description: "Sinta o balanço ternário. 3 tempos por compasso.",
-    targetNotes: 0, 
+    targetNotes: 0,
     timeSignature: 3,
     durationSeconds: 20
   },
@@ -49,12 +49,12 @@ export const LEVELS: LevelConfig[] = [
   }
 ];
 
-// Thresholds ajustados: Perfeito em 210ms para uma experiência mais fluida e didática
+// Thresholds ajustados para serem mais amigáveis e fáceis (experiência didática)
 export const TIMING_THRESHOLDS = {
-  PERFECT: 210,    // Janela de 210ms (Aumentada de 160ms)
-  GOOD: 300,       // Janela para acerto "Bom"
-  OK: 400,        // Janela para acerto "Regular"
-  EARLY_LATE: 550 // Limite máximo de detecção
+  PERFECT: 280,    // Janela maior para facilitar acertos
+  GOOD: 380,
+  OK: 500,
+  EARLY_LATE: 650
 };
 
 export const QUOTES = [

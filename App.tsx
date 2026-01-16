@@ -149,7 +149,7 @@ const App: React.FC = () => {
     }
 
     expectedHitsRef.current.forEach(h => {
-      if (!h.processed && now > h.time + 0.5) {
+      if (!h.processed && now > h.time + 0.6) {
         h.processed = true;
         handleMiss();
       }
@@ -176,7 +176,7 @@ const App: React.FC = () => {
     lastTapTimeRef.current = now;
     const compNow = now - TAP_LATENCY_COMPENSATION;
     let closestIdx = -1;
-    let minD = 0.5;
+    let minD = 0.6;
     const start = Math.max(0, expectedHitsRef.current.length - 8);
     for (let i = start; i < expectedHitsRef.current.length; i++) {
       const h = expectedHitsRef.current[i];
@@ -308,9 +308,9 @@ const App: React.FC = () => {
           </header>
 
           <div className="w-full flex flex-col items-center">
-            <div className="flex gap-6 mb-12">
+            <div className="flex gap-8 mb-12">
               {[0, 1, 2, 3].map(i => (
-                <div key={i} className={`w-3 h-3 rounded-full transition-all duration-100 ${activeBeat === i ? 'bg-orange-500 scale-150 shadow-[0_0_20px_#f97316]' : 'bg-white/5'}`} />
+                <div key={i} className={`w-6 h-6 rounded-full transition-all duration-100 ${activeBeat === i ? 'bg-orange-500 scale-150 shadow-[0_0_30px_#f97316]' : 'bg-white/5 border border-white/10'}`} />
               ))}
             </div>
             <div className="text-center">
