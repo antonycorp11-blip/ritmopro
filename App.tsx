@@ -7,7 +7,7 @@ import TouchArea from './components/TouchArea';
 import { supabase } from './services/supabaseClient';
 
 const TAP_LATENCY_COMPENSATION = 0.055;
-const MAX_TIME_LIMIT = 90; // Aumentado para suportar o início de 45s
+const MAX_TIME_LIMIT = 90;
 const INITIAL_TIME = 45;
 
 // --- Efeitos Visuais ---
@@ -58,6 +58,7 @@ const App: React.FC = () => {
   const [lastDiff, setLastDiff] = useState<number | null>(null);
   const [globalRanking, setGlobalRanking] = useState<any[]>([]);
   const [timeAddedFeedback, setTimeAddedFeedback] = useState<string | null>(null);
+  const [isSpeedUp, setIsSpeedUp] = useState(false);
 
   const timerIDRef = useRef<number | null>(null);
   const nextBeatTimeRef = useRef(0);
@@ -88,8 +89,6 @@ const App: React.FC = () => {
 
     if (currentBpmRef.current >= 80 && score.pts > 0) {
       const pName = playerName.trim() || 'Anon';
-
-      // Busca se já existe uma pontuação maior para este jogador
       const { data: existingData } = await supabase
         .from('ritmo_pro_ranking')
         .select('score')
@@ -98,10 +97,7 @@ const App: React.FC = () => {
         .limit(1);
 
       const highP = existingData && existingData.length > 0 ? existingData[0].score : 0;
-
       if (score.pts > highP) {
-        // Remove anterior (opcional, ou apenas insere e filtramos no display)
-        // O usuário pediu "considere apenas a pontuação mais alta", vamos usar upsert/insert inteligente
         await supabase.from('ritmo_pro_ranking').insert([{
           player_name: pName,
           device_id: deviceId,
@@ -112,11 +108,10 @@ const App: React.FC = () => {
         }]);
       }
     }
-  }, [score, playerName, deviceId]);
+  }, [score.pts, score.accuracy, score.maxCombo, playerName, deviceId]);
 
   const handleMiss = useCallback(() => {
     setScore(s => {
-      // Penalidade de segundos apenas após o primeiro 20x combo
       if (s.maxCombo >= 20 || s.combo >= 20) {
         setTimeAddedFeedback('-2.0s');
         timeLeftRef.current = Math.max(0, timeLeftRef.current - 2.0);
@@ -166,6 +161,7 @@ const App: React.FC = () => {
     nextBeatTimeRef.current = audioEngine.getCurrentTime() + 0.4;
     startTimeRef.current = audioEngine.getCurrentTime();
     setFeedback('FOCO!');
+    setIsSpeedUp(false);
     setState(GameState.PLAYING);
     scheduler();
   };
@@ -206,7 +202,6 @@ const App: React.FC = () => {
       }
 
       if (ptsValue > 0) {
-        // Recompensa de tempo (1s base + bônus combo)
         const timeBase = ptsValue * 1.0;
         const comboBonus = prev.combo * 0.01;
         const timeGain = timeBase + comboBonus;
@@ -217,17 +212,23 @@ const App: React.FC = () => {
           setTimeAddedFeedback(`+${(timeLeftRef.current - prevT).toFixed(1)}s`);
           setTimeout(() => setTimeAddedFeedback(null), 800);
         }
-      } else {
-        // Penalidade de tempo apenas após o primeiro 20x combo
-        if (prev.maxCombo >= 20 || prev.combo >= 20) {
-          setTimeAddedFeedback('-1.0s');
-          timeLeftRef.current = Math.max(0, timeLeftRef.current - 1.0);
-          setTimeout(() => setTimeAddedFeedback(null), 800);
-        }
+      } else if (prev.maxCombo >= 20 || prev.combo >= 20) {
+        setTimeAddedFeedback('-1.0s');
+        timeLeftRef.current = Math.max(0, timeLeftRef.current - 1.0);
+        setTimeout(() => setTimeAddedFeedback(null), 800);
       }
 
       const isG = ptsValue > 0;
       const nc = isG ? prev.combo + 1 : 0;
+
+      // MECANISMO DE SPEED UP: Aumenta 10 BPM a cada 20 de combo
+      if (nc > 0 && nc % 20 === 0 && isG) {
+        currentBpmRef.current += 10;
+        setIsSpeedUp(true);
+        setFeedback('⚡ ACELERO!');
+        setTimeout(() => setIsSpeedUp(false), 1500);
+      }
+
       const fPoints = ptsValue > 0 ? (ptsValue + (nc * 0.015)) : 0;
       const bpmMult = currentBpmRef.current / 100;
 
@@ -241,7 +242,7 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-black text-white font-sans overflow-hidden select-none touch-none bg-[radial-gradient(circle_at_50%_0%,_#1a100a_0%,_#000000_100%)]">
+    <div className={`fixed inset-0 bg-black text-white font-sans overflow-hidden select-none touch-none transition-colors duration-300 ${isSpeedUp ? 'bg-orange-950/20' : 'bg-[radial-gradient(circle_at_50%_0%,_#1a100a_0%,_#000000_100%)]'}`}>
       <FireVfx intensity={score.combo} />
 
       {state === GameState.MENU && (
@@ -300,9 +301,16 @@ const App: React.FC = () => {
       {state === GameState.PLAYING && (
         <div className="flex flex-col h-full p-6 justify-between items-center z-10 py-12">
           <header className="w-full flex justify-between items-start">
-            <div className="bg-orange-600/10 backdrop-blur-md border border-orange-500/20 px-4 py-2 rounded-2xl">
-              <span className="block text-[8px] text-orange-500 font-black uppercase tracking-widest mb-0.5">PTS</span>
-              <span className="text-2xl font-black tabular-nums leading-none">{score.pts.toFixed(1)}</span>
+            <div className="flex gap-2">
+              <div className="bg-orange-600/10 backdrop-blur-md border border-orange-500/20 px-4 py-2 rounded-2xl">
+                <span className="block text-[8px] text-orange-500 font-black uppercase tracking-widest mb-0.5">PTS</span>
+                <span className="text-2xl font-black tabular-nums leading-none">{score.pts.toFixed(1)}</span>
+              </div>
+              {/* INDICADOR DE VELOCIDADE ATUAL */}
+              <div className="bg-white/5 border border-white/10 px-4 py-2 rounded-2xl">
+                <span className="block text-[8px] text-white/40 font-black uppercase mb-0.5">BPM</span>
+                <span className="text-2xl font-black text-orange-500 leading-none">{currentBpmRef.current}</span>
+              </div>
             </div>
             <GameTimer timeLeft={timeLeft} />
           </header>
@@ -313,7 +321,13 @@ const App: React.FC = () => {
                 <div key={i} className={`w-6 h-6 rounded-full transition-all duration-100 ${activeBeat === i ? 'bg-orange-500 scale-150 shadow-[0_0_30px_#f97316]' : 'bg-white/5 border border-white/10'}`} />
               ))}
             </div>
-            <div className="text-center">
+            <div className="text-center relative">
+              {/* Efeito Visual de Speed Up */}
+              {isSpeedUp && (
+                <div className="absolute -top-20 left-1/2 -translate-x-1/2 text-orange-500 text-4xl font-black italic animate-ping whitespace-nowrap">
+                  SPEED UP! +10 BPM
+                </div>
+              )}
               <div className="text-[min(11rem,25vw)] font-black text-white italic tracking-tighter leading-none transition-all duration-100">{score.combo}<span className="text-orange-500 text-[min(4rem,10vw)]">x</span></div>
               <p className="text-2xl font-black text-orange-400 mt-6 h-8 drop-shadow-[0_0_20px_rgba(249,115,22,0.4)]">{feedback}</p>
             </div>
@@ -322,7 +336,7 @@ const App: React.FC = () => {
           <div className="w-full max-w-[300px] flex flex-col items-center gap-4">
             <div className="w-full h-2 bg-white/5 rounded-full relative overflow-hidden ring-1 ring-white/10 mb-4 shadow-inner">
               {lastDiff !== null && (
-                <div className={`absolute h-full w-6 transition-all duration-150 ${Math.abs(lastDiff) < TIMING_THRESHOLDS.PERFECT ? 'bg-orange-500 shadow-[0_0_20px_#f97316]' : 'bg-red-900'}`} style={{ left: `${50 + (lastDiff / 5.0)}%` }} />
+                <div className={`absolute h-full w-6 transition-all duration-150 ${Math.abs(lastDiff) < TIMING_THRESHOLDS.PERFECT ? 'bg-orange-500 shadow-[0_0_30px_#f97316]' : 'bg-red-900'}`} style={{ left: `${50 + (lastDiff / 5.0)}%` }} />
               )}
               <div className="absolute left-1/2 -translate-x-1/2 w-[2px] h-full bg-white/20" />
             </div>
