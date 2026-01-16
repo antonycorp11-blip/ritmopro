@@ -7,7 +7,8 @@ import TouchArea from './components/TouchArea';
 import { supabase } from './services/supabaseClient';
 
 const TAP_LATENCY_COMPENSATION = 0.055;
-const MAX_TIME_LIMIT = 60;
+const MAX_TIME_LIMIT = 90; // Aumentado para suportar o início de 45s
+const INITIAL_TIME = 45;
 
 // --- Efeitos Visuais ---
 
@@ -51,7 +52,7 @@ const App: React.FC = () => {
 
   const [bpm, setBpm] = useState(80);
   const [score, setScore] = useState({ pts: 0, combo: 0, accuracy: 100, maxCombo: 0 });
-  const [timeLeft, setTimeLeft] = useState(20);
+  const [timeLeft, setTimeLeft] = useState(INITIAL_TIME);
   const [activeBeat, setActiveBeat] = useState(-1);
   const [feedback, setFeedback] = useState('');
   const [lastDiff, setLastDiff] = useState<number | null>(null);
@@ -62,7 +63,7 @@ const App: React.FC = () => {
   const nextBeatTimeRef = useRef(0);
   const expectedHitsRef = useRef<{ time: number, processed: boolean }[]>([]);
   const currentBpmRef = useRef(80);
-  const timeLeftRef = useRef(20);
+  const timeLeftRef = useRef(INITIAL_TIME);
   const lastTapTimeRef = useRef(0);
   const startTimeRef = useRef(0);
 
@@ -84,24 +85,46 @@ const App: React.FC = () => {
   const stopGame = useCallback(async () => {
     if (timerIDRef.current) window.clearTimeout(timerIDRef.current);
     setState(GameState.RESULTS);
+
     if (currentBpmRef.current >= 80 && score.pts > 0) {
-      await supabase.from('ritmo_pro_ranking').insert([{
-        player_name: playerName || 'Anon',
-        device_id: deviceId,
-        score: parseFloat(score.pts.toFixed(2)),
-        accuracy: score.accuracy,
-        max_combo: score.maxCombo,
-        bpm: currentBpmRef.current
-      }]);
+      const pName = playerName.trim() || 'Anon';
+
+      // Busca se já existe uma pontuação maior para este jogador
+      const { data: existingData } = await supabase
+        .from('ritmo_pro_ranking')
+        .select('score')
+        .eq('player_name', pName)
+        .order('score', { ascending: false })
+        .limit(1);
+
+      const highP = existingData && existingData.length > 0 ? existingData[0].score : 0;
+
+      if (score.pts > highP) {
+        // Remove anterior (opcional, ou apenas insere e filtramos no display)
+        // O usuário pediu "considere apenas a pontuação mais alta", vamos usar upsert/insert inteligente
+        await supabase.from('ritmo_pro_ranking').insert([{
+          player_name: pName,
+          device_id: deviceId,
+          score: parseFloat(score.pts.toFixed(2)),
+          accuracy: score.accuracy,
+          max_combo: score.maxCombo,
+          bpm: currentBpmRef.current
+        }]);
+      }
     }
   }, [score, playerName, deviceId]);
 
   const handleMiss = useCallback(() => {
-    setScore(s => ({ ...s, combo: 0 }));
+    setScore(s => {
+      // Penalidade de segundos apenas após o primeiro 20x combo
+      if (s.maxCombo >= 20 || s.combo >= 20) {
+        setTimeAddedFeedback('-2.0s');
+        timeLeftRef.current = Math.max(0, timeLeftRef.current - 2.0);
+        setTimeout(() => setTimeAddedFeedback(null), 800);
+      }
+      return { ...s, combo: 0 };
+    });
     setFeedback('FALTOU!');
-    setTimeAddedFeedback('-1.5s'); // Penalidade mais severa para misses
-    timeLeftRef.current = Math.max(0, timeLeftRef.current - 1.5);
-    setTimeout(() => setTimeAddedFeedback(null), 800);
   }, []);
 
   const scheduler = useCallback(() => {
@@ -138,8 +161,8 @@ const App: React.FC = () => {
     audioEngine.init();
     expectedHitsRef.current = [];
     setScore({ pts: 0, combo: 0, accuracy: 100, maxCombo: 0 });
-    setTimeLeft(20);
-    timeLeftRef.current = 20;
+    setTimeLeft(INITIAL_TIME);
+    timeLeftRef.current = INITIAL_TIME;
     nextBeatTimeRef.current = audioEngine.getCurrentTime() + 0.4;
     startTimeRef.current = audioEngine.getCurrentTime();
     setFeedback('FOCO!');
@@ -166,7 +189,7 @@ const App: React.FC = () => {
       let rating = 'MISS';
       let ptsValue = 0;
       let diff = 0;
-      let accChange = -5;
+      let accChange = -4;
 
       if (closestIdx !== -1) {
         const target = expectedHitsRef.current[closestIdx];
@@ -182,9 +205,8 @@ const App: React.FC = () => {
         setFeedback('ERROU!');
       }
 
-      // LÓGICA DE TEMPO: Concede segundos desde o início (mesmo com combo 0)
-      // Base: 1s para Perfeito, escala levemente com o combo para progressão (0.01s por combo)
       if (ptsValue > 0) {
+        // Recompensa de tempo (1s base + bônus combo)
         const timeBase = ptsValue * 1.0;
         const comboBonus = prev.combo * 0.01;
         const timeGain = timeBase + comboBonus;
@@ -196,10 +218,12 @@ const App: React.FC = () => {
           setTimeout(() => setTimeAddedFeedback(null), 800);
         }
       } else {
-        // Penalidade para toques extras sem alvo
-        setTimeAddedFeedback('-0.5s');
-        timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.5);
-        setTimeout(() => setTimeAddedFeedback(null), 800);
+        // Penalidade de tempo apenas após o primeiro 20x combo
+        if (prev.maxCombo >= 20 || prev.combo >= 20) {
+          setTimeAddedFeedback('-1.0s');
+          timeLeftRef.current = Math.max(0, timeLeftRef.current - 1.0);
+          setTimeout(() => setTimeAddedFeedback(null), 800);
+        }
       }
 
       const isG = ptsValue > 0;
@@ -267,7 +291,7 @@ const App: React.FC = () => {
                 </div>
               </div>
             )) : (
-              <p className="text-center text-orange-900 font-black py-10">Buscando...</p>
+              <p className="text-center text-orange-900 font-black py-10">Buscando melhores...</p>
             )}
           </div>
         </div>
@@ -296,7 +320,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="w-full max-w-[300px] flex flex-col items-center gap-4">
-            {/* Accuracy Bar: MOVIMENTADA PARA CIMA DO BOTÃO */}
             <div className="w-full h-2 bg-white/5 rounded-full relative overflow-hidden ring-1 ring-white/10 mb-4 shadow-inner">
               {lastDiff !== null && (
                 <div className={`absolute h-full w-6 transition-all duration-150 ${Math.abs(lastDiff) < TIMING_THRESHOLDS.PERFECT ? 'bg-orange-500 shadow-[0_0_20px_#f97316]' : 'bg-red-900'}`} style={{ left: `${50 + (lastDiff / 5.0)}%` }} />
