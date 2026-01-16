@@ -83,10 +83,7 @@ const App: React.FC = () => {
 
   const stopGame = useCallback(async () => {
     if (timerIDRef.current) window.clearTimeout(timerIDRef.current);
-    const duration = audioEngine.getCurrentTime() - startTimeRef.current;
-
     setState(GameState.RESULTS);
-
     if (currentBpmRef.current >= 80 && score.pts > 0) {
       await supabase.from('ritmo_pro_ranking').insert([{
         player_name: playerName || 'Anon',
@@ -102,29 +99,22 @@ const App: React.FC = () => {
   const handleMiss = useCallback(() => {
     setScore(s => ({ ...s, combo: 0 }));
     setFeedback('FALTOU!');
-    // Penalidade visual de erro
-    setTimeAddedFeedback('-1s');
-    timeLeftRef.current = Math.max(0, timeLeftRef.current - 1);
+    setTimeAddedFeedback('-1.5s'); // Penalidade mais severa para misses
+    timeLeftRef.current = Math.max(0, timeLeftRef.current - 1.5);
     setTimeout(() => setTimeAddedFeedback(null), 800);
   }, []);
 
   const scheduler = useCallback(() => {
     const now = audioEngine.getCurrentTime();
-
     timeLeftRef.current -= 0.025;
     const sec = Math.max(0, Math.round(timeLeftRef.current));
     if (sec !== timeLeft) setTimeLeft(sec);
-
-    if (timeLeftRef.current <= 0) {
-      stopGame();
-      return;
-    }
+    if (timeLeftRef.current <= 0) { stopGame(); return; }
 
     const tHorizon = now + 0.20;
     while (nextBeatTimeRef.current < tHorizon) {
       const t = nextBeatTimeRef.current;
-      const count = expectedHitsRef.current.length;
-      audioEngine.playStrum(t, count % 4 === 0);
+      audioEngine.playStrum(t, expectedHitsRef.current.length % 4 === 0);
       expectedHitsRef.current.push({ time: t, processed: false });
       nextBeatTimeRef.current += (60.0 / currentBpmRef.current);
     }
@@ -141,7 +131,6 @@ const App: React.FC = () => {
         handleMiss();
       }
     });
-
     timerIDRef.current = window.setTimeout(scheduler, 25);
   }, [timeLeft, activeBeat, stopGame, handleMiss]);
 
@@ -162,11 +151,9 @@ const App: React.FC = () => {
     const now = audioEngine.getCurrentTime();
     if (now - lastTapTimeRef.current < 0.120) return;
     lastTapTimeRef.current = now;
-
     const compNow = now - TAP_LATENCY_COMPENSATION;
     let closestIdx = -1;
     let minD = 0.5;
-
     const start = Math.max(0, expectedHitsRef.current.length - 8);
     for (let i = start; i < expectedHitsRef.current.length; i++) {
       const h = expectedHitsRef.current[i];
@@ -186,7 +173,6 @@ const App: React.FC = () => {
         target.processed = true;
         diff = (compNow - target.time) * 1000;
         setLastDiff(diff);
-
         const absD = Math.abs(diff);
         if (absD < TIMING_THRESHOLDS.PERFECT) { rating = 'PERFECT'; ptsValue = 1.0; setFeedback('🔥 PERFEITO!'); accChange = 1; }
         else if (absD < TIMING_THRESHOLDS.GOOD) { rating = 'GOOD'; ptsValue = 0.5; setFeedback('BOM!'); accChange = 0.5; }
@@ -196,15 +182,21 @@ const App: React.FC = () => {
         setFeedback('ERROU!');
       }
 
+      // LÓGICA DE TEMPO: Concede segundos desde o início (mesmo com combo 0)
+      // Base: 1s para Perfeito, escala levemente com o combo para progressão (0.01s por combo)
       if (ptsValue > 0) {
-        const timeGain = ptsValue * (1 + (prev.combo * 0.005));
+        const timeBase = ptsValue * 1.0;
+        const comboBonus = prev.combo * 0.01;
+        const timeGain = timeBase + comboBonus;
         const prevT = timeLeftRef.current;
         timeLeftRef.current = Math.min(MAX_TIME_LIMIT, timeLeftRef.current + timeGain);
+
         if (prevT < MAX_TIME_LIMIT) {
           setTimeAddedFeedback(`+${(timeLeftRef.current - prevT).toFixed(1)}s`);
           setTimeout(() => setTimeAddedFeedback(null), 800);
         }
       } else {
+        // Penalidade para toques extras sem alvo
         setTimeAddedFeedback('-0.5s');
         timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.5);
         setTimeout(() => setTimeAddedFeedback(null), 800);
@@ -236,7 +228,6 @@ const App: React.FC = () => {
             </h1>
             <p className="text-[10px] text-orange-900 font-black tracking-[0.5em] uppercase mt-2">ALTA PERFORMANCE RÍTMICA</p>
           </header>
-
           <div className="w-full max-w-sm space-y-4">
             <div className="bg-[#1a0f0a]/80 backdrop-blur-xl border-2 border-orange-500/10 p-8 rounded-[3rem] shadow-2xl relative">
               <div className="absolute -top-3 left-8 bg-orange-600 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest text-white">IDENTIFICAÇÃO</div>
@@ -245,7 +236,7 @@ const App: React.FC = () => {
                 <span className={`text-9xl font-black leading-none tabular-nums tracking-tighter transition-colors ${bpm < 80 ? 'text-red-500' : 'text-white'}`}>{bpm}</span>
                 <p className="text-orange-900 font-extrabold text-[10px] uppercase tracking-[0.2em] mt-2">BPM DO ESTUDO</p>
               </div>
-              <input type="range" min="40" max="180" step="10" value={bpm} onChange={(e) => setBpm(parseInt(e.target.value))} className="w-full h-3 bg-black rounded-full appearance-none accent-orange-500 mb-8" />
+              <input type="range" min="80" max="180" step="10" value={bpm} onChange={(e) => setBpm(parseInt(e.target.value))} className="w-full h-3 bg-black rounded-full appearance-none accent-orange-500 mb-8" />
               <button disabled={!playerName.trim()} onClick={startGame} className="w-full bg-orange-600 text-white font-black py-6 rounded-[2rem] text-xl shadow-2xl shadow-orange-600/20 active:scale-95 transition-all disabled:opacity-30">INICIAR ESTUDO</button>
             </div>
             <button onClick={() => { fetchRanking(); setState(GameState.RANKING) }} className="w-full bg-white/5 border border-white/10 py-5 rounded-3xl text-[10px] font-black text-white/40 tracking-[0.3em] uppercase transition-colors">🏆 Ver Ranking Global</button>
@@ -299,24 +290,27 @@ const App: React.FC = () => {
               ))}
             </div>
             <div className="text-center">
-              <div className="text-[min(11rem,25vw)] font-black text-white italic tracking-tighter leading-none">{score.combo}<span className="text-orange-500 text-[min(4rem,10vw)]">x</span></div>
+              <div className="text-[min(11rem,25vw)] font-black text-white italic tracking-tighter leading-none transition-all duration-100">{score.combo}<span className="text-orange-500 text-[min(4rem,10vw)]">x</span></div>
               <p className="text-2xl font-black text-orange-400 mt-6 h-8 drop-shadow-[0_0_20px_rgba(249,115,22,0.4)]">{feedback}</p>
             </div>
           </div>
 
-          <div className="w-full max-w-xs flex flex-col items-center gap-10">
-            <TouchArea onTap={handleTap} />
-            <div className="w-full h-2 bg-white/5 rounded-full relative overflow-hidden ring-1 ring-white/10">
+          <div className="w-full max-w-[300px] flex flex-col items-center gap-4">
+            {/* Accuracy Bar: MOVIMENTADA PARA CIMA DO BOTÃO */}
+            <div className="w-full h-2 bg-white/5 rounded-full relative overflow-hidden ring-1 ring-white/10 mb-4 shadow-inner">
               {lastDiff !== null && (
                 <div className={`absolute h-full w-6 transition-all duration-150 ${Math.abs(lastDiff) < TIMING_THRESHOLDS.PERFECT ? 'bg-orange-500 shadow-[0_0_20px_#f97316]' : 'bg-red-900'}`} style={{ left: `${50 + (lastDiff / 5.0)}%` }} />
               )}
-              <div className="absolute left-1/2 -translate-x-1/2 w-[2px] h-full bg-white/30" />
+              <div className="absolute left-1/2 -translate-x-1/2 w-[2px] h-full bg-white/20" />
             </div>
-            <button onClick={stopGame} className="bg-red-600/10 border-2 border-red-600/20 text-red-500 font-black py-4 px-10 rounded-2xl text-[12px] uppercase tracking-[0.3em] active:bg-red-600 active:text-white shadow-xl transition-all">ENCERRAR PARTIDA</button>
+
+            <TouchArea onTap={handleTap} />
+
+            <button onClick={stopGame} className="bg-red-600/10 border-2 border-red-600/20 text-red-500 font-black py-4 px-10 rounded-2xl text-[12px] uppercase tracking-[0.3em] active:bg-red-600 active:text-white shadow-xl transition-all mt-6">ENCERRAR PARTIDA</button>
           </div>
 
           {timeAddedFeedback && (
-            <div className="fixed top-1/4 right-10 text-3xl font-black animate-bounce z-50 drop-shadow-2xl text-orange-500">
+            <div className={`fixed top-1/4 right-5 text-4xl font-black animate-bounce z-50 drop-shadow-2xl ${timeAddedFeedback.includes('-') ? 'text-red-500' : 'text-green-500'}`}>
               {timeAddedFeedback}
             </div>
           )}
