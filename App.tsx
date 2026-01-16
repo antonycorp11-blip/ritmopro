@@ -67,6 +67,7 @@ const App: React.FC = () => {
   const timeLeftRef = useRef(INITIAL_TIME);
   const lastTapTimeRef = useRef(0);
   const startTimeRef = useRef(0);
+  const consecutiveMissesRef = useRef(0); // Rastro de erros para quebra de combo
 
   useEffect(() => { currentBpmRef.current = bpm; }, [bpm]);
 
@@ -111,15 +112,20 @@ const App: React.FC = () => {
   }, [score.pts, score.accuracy, score.maxCombo, playerName, deviceId]);
 
   const handleMiss = useCallback(() => {
+    consecutiveMissesRef.current += 1;
+    const shouldBreakCombo = consecutiveMissesRef.current >= 2;
+
     setScore(s => {
+      // Penalidade de tempo apenas após 20x combo
       if (s.maxCombo >= 20 || s.combo >= 20) {
         setTimeAddedFeedback('-2.0s');
         timeLeftRef.current = Math.max(0, timeLeftRef.current - 2.0);
         setTimeout(() => setTimeAddedFeedback(null), 800);
       }
-      return { ...s, combo: 0 };
+      return { ...s, combo: shouldBreakCombo ? 0 : s.combo };
     });
-    setFeedback('FALTOU!');
+
+    setFeedback(shouldBreakCombo ? 'COMBO QUEBROU!' : 'FALTOU! (1/2)');
   }, []);
 
   const scheduler = useCallback(() => {
@@ -155,6 +161,7 @@ const App: React.FC = () => {
   const startGame = () => {
     audioEngine.init();
     expectedHitsRef.current = [];
+    consecutiveMissesRef.current = 0;
     setScore({ pts: 0, combo: 0, accuracy: 100, maxCombo: 0 });
     setTimeLeft(INITIAL_TIME);
     timeLeftRef.current = INITIAL_TIME;
@@ -201,6 +208,19 @@ const App: React.FC = () => {
         setFeedback('ERROU!');
       }
 
+      const isG = ptsValue > 0;
+      let nc = prev.combo;
+
+      if (isG) {
+        consecutiveMissesRef.current = 0; // Reset ao acertar
+        nc = prev.combo + 1;
+      } else {
+        consecutiveMissesRef.current += 1; // Incrementa ao errar
+        if (consecutiveMissesRef.current >= 2) {
+          nc = 0; // Quebra o combo apenas no segundo erro seguido
+        }
+      }
+
       if (ptsValue > 0) {
         const timeBase = ptsValue * 1.0;
         const comboBonus = prev.combo * 0.01;
@@ -218,11 +238,8 @@ const App: React.FC = () => {
         setTimeout(() => setTimeAddedFeedback(null), 800);
       }
 
-      const isG = ptsValue > 0;
-      const nc = isG ? prev.combo + 1 : 0;
-
-      // MECANISMO DE SPEED UP: Aumenta 10 BPM a cada 20 de combo
-      if (nc > 0 && nc % 20 === 0 && isG) {
+      // MECANISMO DE SPEED UP
+      if (isG && nc > 0 && nc % 20 === 0) {
         currentBpmRef.current += 10;
         setIsSpeedUp(true);
         setFeedback('⚡ ACELERO!');
@@ -306,7 +323,6 @@ const App: React.FC = () => {
                 <span className="block text-[8px] text-orange-500 font-black uppercase tracking-widest mb-0.5">PTS</span>
                 <span className="text-2xl font-black tabular-nums leading-none">{score.pts.toFixed(1)}</span>
               </div>
-              {/* INDICADOR DE VELOCIDADE ATUAL */}
               <div className="bg-white/5 border border-white/10 px-4 py-2 rounded-2xl">
                 <span className="block text-[8px] text-white/40 font-black uppercase mb-0.5">BPM</span>
                 <span className="text-2xl font-black text-orange-500 leading-none">{currentBpmRef.current}</span>
@@ -322,7 +338,6 @@ const App: React.FC = () => {
               ))}
             </div>
             <div className="text-center relative">
-              {/* Efeito Visual de Speed Up */}
               {isSpeedUp && (
                 <div className="absolute -top-20 left-1/2 -translate-x-1/2 text-orange-500 text-4xl font-black italic animate-ping whitespace-nowrap">
                   SPEED UP! +10 BPM
