@@ -40,7 +40,12 @@ const GameTimer = memo(({ timeLeft }: { timeLeft: number }) => (
 
 const App: React.FC = () => {
   const [state, setState] = useState<GameState>(GameState.MENU);
+  const [isLocked, setIsLocked] = useState(true); // Começa travado até verificar
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
   const [playerName, setPlayerName] = useState(() => localStorage.getItem('studio_acorde_player_name') || '');
+  const [playerPin, setPlayerPin] = useState(() => localStorage.getItem('studio_acorde_player_pin') || ''); // Novo estado para PIN
+
   const [deviceId] = useState(() => {
     let id = localStorage.getItem('studio_acorde_device_id');
     if (!id) {
@@ -67,18 +72,91 @@ const App: React.FC = () => {
   const timeLeftRef = useRef(INITIAL_TIME);
   const lastTapTimeRef = useRef(0);
   const startTimeRef = useRef(0);
-  const consecutiveMissesRef = useRef(0); // Rastro de erros para quebra de combo
+  const consecutiveMissesRef = useRef(0);
+
+  // --- TRAVA DE SEGURANÇA E LOGIN ---
+  useEffect(() => {
+    const performAuth = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlPin = params.get('pin');
+      const storedPin = localStorage.getItem('studio_acorde_player_pin');
+
+      const pinToVerify = urlPin || storedPin;
+
+      if (!pinToVerify) {
+        setIsLocked(true);
+        setLoadingAuth(false);
+        return;
+      }
+
+      try {
+        // Busca na tabela UNIFICADA 'players'
+        const { data, error } = await supabase
+          .from('players')
+          .select('name, recovery_pin')
+          .eq('recovery_pin', pinToVerify)
+          .single();
+
+        if (data && !error) {
+          // SUCESSO
+          setPlayerName(data.name);
+          setPlayerPin(data.recovery_pin);
+          localStorage.setItem('studio_acorde_player_name', data.name);
+          localStorage.setItem('studio_acorde_player_pin', data.recovery_pin);
+          setIsLocked(false);
+
+          // Limpa URL
+          if (urlPin) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        } else {
+          // FALHA
+          console.error("Auth falhou:", error);
+          if (urlPin) {
+            // Se o PIN da URL for inválido, podemos limpar ou bloquear.
+            // Bloqueia se não achar.
+          }
+          // Se o PIN armazenado não for mais válido (ex: mudou no banco), deve bloquear?
+          // Por segurança, se a verificação falha, bloqueia.
+          setIsLocked(true);
+          localStorage.removeItem('studio_acorde_player_pin'); // Limpa inválido
+        }
+      } catch (err) {
+        console.error("Erro auth:", err);
+        setIsLocked(true);
+      } finally {
+        setLoadingAuth(false);
+      }
+    };
+
+    performAuth();
+  }, []);
 
   useEffect(() => { currentBpmRef.current = bpm; }, [bpm]);
 
   const fetchRanking = useCallback(async () => {
     try {
+      // Buscamos um número maior de registros para filtrar duplicados no JS
+      // e mostrar apenas o melhor score de cada jogador no Top 10.
       const { data } = await supabase
         .from('ritmo_pro_ranking')
-        .select('player_name, score, accuracy, bpm')
+        .select('player_name, score, accuracy, bpm, pin')
         .order('score', { ascending: false })
-        .limit(10);
-      if (data) setGlobalRanking(data);
+        .limit(50);
+
+      if (data) {
+        const uniqueEntries: any[] = [];
+        const seenPins = new Set();
+
+        for (const entry of data) {
+          if (!seenPins.has(entry.pin)) {
+            uniqueEntries.push(entry);
+            seenPins.add(entry.pin);
+          }
+          if (uniqueEntries.length >= 10) break;
+        }
+        setGlobalRanking(uniqueEntries);
+      }
     } catch (e) {
       console.warn("Ranking loading failed");
     }
@@ -88,28 +166,29 @@ const App: React.FC = () => {
     if (timerIDRef.current) window.clearTimeout(timerIDRef.current);
     setState(GameState.RESULTS);
 
+    // Só salvamos se atingiu o BPM mínimo e tem pontos
     if (currentBpmRef.current >= 80 && score.pts > 0) {
       const pName = playerName.trim() || 'Anon';
-      const { data: existingData } = await supabase
-        .from('ritmo_pro_ranking')
-        .select('score')
-        .eq('player_name', pName)
-        .order('score', { ascending: false })
-        .limit(1);
 
-      const highP = existingData && existingData.length > 0 ? existingData[0].score : 0;
-      if (score.pts > highP) {
+      // LÓGICA DE SALVAMENTO PARA INTEGRAÇÃO COM ACORDE GALLERY
+      // Gravamos cada sessão para garantir que o XP seja somado ao perfil global do aluno.
+      // O campo 'pin' é essencial para identificar o aluno na Galeria.
+      try {
         await supabase.from('ritmo_pro_ranking').insert([{
           player_name: pName,
           device_id: deviceId,
+          pin: playerPin, // CRITICAL: Sincronização de XP por PIN
           score: parseFloat(score.pts.toFixed(2)),
           accuracy: score.accuracy,
           max_combo: score.maxCombo,
           bpm: currentBpmRef.current
         }]);
+        console.log("Score e XP enviados com sucesso para a Galeria.");
+      } catch (err) {
+        console.error("Erro ao salvar score:", err);
       }
     }
-  }, [score.pts, score.accuracy, score.maxCombo, playerName, deviceId]);
+  }, [score.pts, score.accuracy, score.maxCombo, playerName, deviceId, playerPin]);
 
   const handleMiss = useCallback(() => {
     consecutiveMissesRef.current += 1;
@@ -238,7 +317,6 @@ const App: React.FC = () => {
         setTimeout(() => setTimeAddedFeedback(null), 800);
       }
 
-      // MECANISMO DE SPEED UP
       if (isG && nc > 0 && nc % 20 === 0) {
         currentBpmRef.current += 10;
         setIsSpeedUp(true);
@@ -257,6 +335,28 @@ const App: React.FC = () => {
       };
     });
   }, []);
+
+  // --- RENDER DO BLOCK/LOADING ---
+  if (loadingAuth) {
+    return <div className="fixed inset-0 bg-black flex items-center justify-center text-orange-500 font-black">LOGIN...</div>;
+  }
+
+  if (isLocked) {
+    return (
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center p-8 z-50">
+        <h1 className="text-4xl font-black text-white italic tracking-tighter mb-4 text-center">ACESSO NEGADO</h1>
+        <p className="text-orange-500 text-sm font-bold uppercase tracking-widest mb-8 text-center max-w-xs">
+          Acesse este jogo através da plataforma Acorde Gallery.
+        </p>
+        <a
+          href="https://acordegallery.com"
+          className="bg-orange-600 text-white font-black py-4 px-8 rounded-2xl text-[10px] uppercase tracking-[0.2em] shadow-lg active:scale-95 transition-all"
+        >
+          Ir para Acorde Gallery
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div className={`fixed inset-0 bg-black text-white font-sans overflow-hidden select-none touch-none transition-colors duration-300 ${isSpeedUp ? 'bg-orange-950/20' : 'bg-[radial-gradient(circle_at_50%_0%,_#1a100a_0%,_#000000_100%)]'}`}>
