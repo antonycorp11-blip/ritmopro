@@ -73,6 +73,17 @@ const App: React.FC = () => {
   const lastTapTimeRef = useRef(0);
   const startTimeRef = useRef(0);
   const consecutiveMissesRef = useRef(0);
+  const activeBeatRef = useRef(-1);
+  const lastStateTimeRef = useRef(INITIAL_TIME);
+  const scoreRef = useRef(score);
+  const playerNameRef = useRef(playerName);
+  const playerPinRef = useRef(playerPin);
+  const deviceIdRef = useRef(deviceId);
+
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { playerNameRef.current = playerName; }, [playerName]);
+  useEffect(() => { playerPinRef.current = playerPin; }, [playerPin]);
+  useEffect(() => { deviceIdRef.current = deviceId; }, [deviceId]);
 
   // --- TRAVA DE SEGURANÇA E LOGIN ---
   useEffect(() => {
@@ -162,46 +173,72 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const isStoppingRef = useRef(false);
+
   const stopGame = useCallback(async () => {
+    if (isStoppingRef.current) return;
+    isStoppingRef.current = true;
+
     if (timerIDRef.current) window.clearTimeout(timerIDRef.current);
     setState(GameState.RESULTS);
 
+    const currentScore = scoreRef.current;
+
+    // Debug interno
+    (window as any).lastFinishedScore = currentScore;
+
+    console.log("Tentando encerrar partida...", { pts: currentScore.pts, bpm: currentBpmRef.current });
+
     // Só salvamos se atingiu o BPM mínimo e tem pontos
-    if (currentBpmRef.current >= 80 && score.pts > 0) {
-      const pName = playerName.trim() || 'Anon';
+    if (currentBpmRef.current >= 80 && currentScore.pts > 0) {
+      const pName = playerNameRef.current.trim() || 'Anon';
+      console.log("Enviando score para o Supabase...", { pName, pin: playerPinRef.current });
 
       // LÓGICA DE SALVAMENTO PARA INTEGRAÇÃO COM ACORDE GALLERY
       // Gravamos cada sessão para garantir que o XP seja somado ao perfil global do aluno.
       // O campo 'pin' é essencial para identificar o aluno na Galeria.
       try {
-        await supabase.from('ritmo_pro_ranking').insert([{
+        const { error } = await supabase.from('ritmo_pro_ranking').insert([{
           player_name: pName,
-          device_id: deviceId,
-          pin: playerPin, // CRITICAL: Sincronização de XP por PIN
-          score: parseFloat(score.pts.toFixed(2)),
-          accuracy: score.accuracy,
-          max_combo: score.maxCombo,
+          device_id: deviceIdRef.current,
+          pin: playerPinRef.current, // CRITICAL: Sincronização de XP por PIN
+          score: parseFloat(currentScore.pts.toFixed(2)),
+          accuracy: currentScore.accuracy,
+          max_combo: currentScore.maxCombo,
           bpm: currentBpmRef.current
         }]);
-        console.log("Score e XP enviados com sucesso para a Galeria.");
+
+        if (error) {
+          console.error("Erro Supabase:", error);
+          alert("Erro ao salvar pontos: " + error.message);
+        } else {
+          console.log("Score e XP enviados com sucesso para a Galeria.");
+          // alert("Sincronizado com a Galeria!");
+        }
       } catch (err) {
-        console.error("Erro ao salvar score:", err);
+        console.error("Erro fatal ao salvar score:", err);
       }
+    } else {
+      console.warn("Partida não elegível para ranking (pontos ou bpm insuficientes)");
     }
-  }, [score.pts, score.accuracy, score.maxCombo, playerName, deviceId, playerPin]);
+  }, []);
 
   const handleMiss = useCallback(() => {
     consecutiveMissesRef.current += 1;
     const shouldBreakCombo = consecutiveMissesRef.current >= 2;
 
     setScore(s => {
+      const newScore = { ...s, combo: shouldBreakCombo ? 0 : s.combo };
+      // Sincroniza o ref imediatamente para que stopGame() veja o valor correto
+      scoreRef.current = newScore;
+
       // Penalidade de tempo apenas após 20x combo
       if (s.maxCombo >= 20 || s.combo >= 20) {
         setTimeAddedFeedback('-2.0s');
         timeLeftRef.current = Math.max(0, timeLeftRef.current - 2.0);
         setTimeout(() => setTimeAddedFeedback(null), 800);
       }
-      return { ...s, combo: shouldBreakCombo ? 0 : s.combo };
+      return newScore;
     });
 
     setFeedback(shouldBreakCombo ? 'COMBO QUEBROU!' : 'FALTOU! (1/2)');
@@ -210,8 +247,13 @@ const App: React.FC = () => {
   const scheduler = useCallback(() => {
     const now = audioEngine.getCurrentTime();
     timeLeftRef.current -= 0.025;
+
     const sec = Math.max(0, Math.round(timeLeftRef.current));
-    if (sec !== timeLeft) setTimeLeft(sec);
+    if (sec !== lastStateTimeRef.current) {
+      lastStateTimeRef.current = sec;
+      setTimeLeft(sec);
+    }
+
     if (timeLeftRef.current <= 0) { stopGame(); return; }
 
     const tHorizon = now + 0.20;
@@ -225,7 +267,10 @@ const App: React.FC = () => {
     const activeIdx = expectedHitsRef.current.findIndex(h => h.time > now - 0.1);
     if (activeIdx !== -1) {
       const beat = activeIdx % 4;
-      if (beat !== activeBeat) setActiveBeat(beat);
+      if (beat !== activeBeatRef.current) {
+        activeBeatRef.current = beat;
+        setActiveBeat(beat);
+      }
     }
 
     expectedHitsRef.current.forEach(h => {
@@ -235,7 +280,7 @@ const App: React.FC = () => {
       }
     });
     timerIDRef.current = window.setTimeout(scheduler, 25);
-  }, [timeLeft, activeBeat, stopGame, handleMiss]);
+  }, [stopGame, handleMiss]);
 
   const startGame = () => {
     audioEngine.init();
@@ -244,9 +289,12 @@ const App: React.FC = () => {
     setScore({ pts: 0, combo: 0, accuracy: 100, maxCombo: 0 });
     setTimeLeft(INITIAL_TIME);
     timeLeftRef.current = INITIAL_TIME;
+    lastStateTimeRef.current = INITIAL_TIME;
+    activeBeatRef.current = -1;
     nextBeatTimeRef.current = audioEngine.getCurrentTime() + 0.4;
     startTimeRef.current = audioEngine.getCurrentTime();
     setFeedback('FOCO!');
+    isStoppingRef.current = false;
     setIsSpeedUp(false);
     setState(GameState.PLAYING);
     scheduler();
@@ -327,12 +375,16 @@ const App: React.FC = () => {
       const fPoints = ptsValue > 0 ? (ptsValue + (nc * 0.015)) : 0;
       const bpmMult = currentBpmRef.current / 100;
 
-      return {
+      const newScore = {
         pts: prev.pts + (fPoints * bpmMult),
         combo: nc,
         maxCombo: Math.max(prev.maxCombo, nc),
         accuracy: Math.min(100, Math.max(0, prev.accuracy + accChange))
       };
+
+      // Garantir que o Ref tenha o valor exato no momento do encerramento
+      scoreRef.current = newScore;
+      return newScore;
     });
   }, []);
 
