@@ -64,6 +64,7 @@ const App: React.FC = () => {
   const [globalRanking, setGlobalRanking] = useState<any[]>([]);
   const [timeAddedFeedback, setTimeAddedFeedback] = useState<string | null>(null);
   const [isSpeedUp, setIsSpeedUp] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
 
   const timerIDRef = useRef<number | null>(null);
   const nextBeatTimeRef = useRef(0);
@@ -191,17 +192,14 @@ const App: React.FC = () => {
 
     // Só salvamos se atingiu o BPM mínimo e tem pontos
     if (currentBpmRef.current >= 80 && currentScore.pts > 0) {
+      setSaveStatus('saving');
       const pName = playerNameRef.current.trim() || 'Anon';
-      console.log("Enviando score para o Supabase...", { pName, pin: playerPinRef.current });
 
-      // LÓGICA DE SALVAMENTO PARA INTEGRAÇÃO COM ACORDE GALLERY
-      // Gravamos cada sessão para garantir que o XP seja somado ao perfil global do aluno.
-      // O campo 'pin' é essencial para identificar o aluno na Galeria.
       try {
         const { error } = await supabase.from('ritmo_pro_ranking').insert([{
           player_name: pName,
           device_id: deviceIdRef.current,
-          pin: playerPinRef.current, // CRITICAL: Sincronização de XP por PIN
+          pin: playerPinRef.current,
           score: parseFloat(currentScore.pts.toFixed(2)),
           accuracy: currentScore.accuracy,
           max_combo: currentScore.maxCombo,
@@ -210,16 +208,20 @@ const App: React.FC = () => {
 
         if (error) {
           console.error("Erro Supabase:", error);
-          alert("Erro ao salvar pontos: " + error.message);
+          setSaveStatus('error');
         } else {
-          console.log("Score e XP enviados com sucesso para a Galeria.");
-          // alert("Sincronizado com a Galeria!");
+          setSaveStatus('success');
+          // Redireciona se houver flag de saída pendente
+          if ((window as any).pendingExitRitmo) {
+            window.top.location.href = "https://acordegallery.vercel.app";
+          }
         }
       } catch (err) {
         console.error("Erro fatal ao salvar score:", err);
+        setSaveStatus('error');
       }
     } else {
-      console.warn("Partida não elegível para ranking (pontos ou bpm insuficientes)");
+      console.warn("Partida não elegível para ranking");
     }
   }, []);
 
@@ -296,6 +298,7 @@ const App: React.FC = () => {
     setFeedback('FOCO!');
     isStoppingRef.current = false;
     setIsSpeedUp(false);
+    setSaveStatus('idle'); // Reset status
     setState(GameState.PLAYING);
     scheduler();
   };
@@ -480,7 +483,22 @@ const App: React.FC = () => {
                 <span className="text-2xl font-black text-orange-500 leading-none">{currentBpmRef.current}</span>
               </div>
             </div>
-            <GameTimer timeLeft={timeLeft} />
+            <div className="flex items-center gap-3">
+              <GameTimer timeLeft={timeLeft} />
+              <button
+                onClick={() => {
+                  if (score.pts > 0) {
+                    (window as any).pendingExitRitmo = true;
+                    stopGame();
+                  } else {
+                    window.top.location.href = "https://acordegallery.vercel.app";
+                  }
+                }}
+                className={`bg-white/5 border border-white/10 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-orange-500 active:scale-95 transition-all ${saveStatus === 'saving' ? 'opacity-50' : ''}`}
+              >
+                {saveStatus === 'saving' ? 'Sincronizando...' : 'Sair'}
+              </button>
+            </div>
           </header>
 
           <div className="w-full flex flex-col items-center">
